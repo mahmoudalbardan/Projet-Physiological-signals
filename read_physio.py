@@ -131,46 +131,6 @@ def extract_from_df(df,to_extract):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 if __name__ == "__main__":   
 
     # Explarotary data analysis
