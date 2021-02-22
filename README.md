@@ -1,5 +1,5 @@
 # Projet-PSA
-This repository is dedicated to PSA project. It is a private repository so just people with given access can scripts and data analysis. It will be updated regularly according to the advancements. 
+This repository is dedicated to PSA project. It is a private repository so just people with given access can read scripts and data analysis. It will be updated regularly according to the advancements. 
 
 It contains for the moment two scripts for reading and denoising the signals using wavelets transformations. The next step is to extract some features related to time-frequency from physiological signals in order to perform potential clustering in the futur.
 
