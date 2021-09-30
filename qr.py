@@ -317,3 +317,48 @@ newcoefsdf = newcoefsdf[selected_features]
 
 
 
+
+
+
+
+
+
+# article
+# tableau 
+configfile = "D:/scripts/config.ini"
+config = get_config(configfile)
+grid_alpha = np.array([1] + list(range(5,96,5)))/100
+df_path = config["feature selection"]["dfpath"]
+features = pd.read_pickle(df_path).columns[:-4]
+path = 'D:/scripts/coeffs'
+list_of_features = []
+newcoefs = []
+coefdf = pd.read_pickle(path)
+for i in range(coefdf.shape[0]):
+    z = coefdf.iloc[i].values[0][-1] # -1 stands for the latest and greatest value of s: unpenalized 
+    wh = np.where(z!=0)[0]
+    list_of_features.append(list(features[wh]))
+    newcoefs.append(z)
+
+    
+flat_features = [item for sublist in list_of_features for item in sublist]
+selected_features = [e[0] for e in Counter(flat_features).most_common()[:28]]
+newcoefs = np.vstack(newcoefs)
+newcoefsdf = pd.DataFrame(newcoefs,columns=features,index=grid_alpha)
+newcoefsdf = newcoefsdf[selected_features]
+
+
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+scaled = scaler.fit_transform(newcoefsdf)
+scaled = pd.DataFrame(scaled,columns=selected_features,index=grid_alpha)
+
+for feat in selected_features:
+    print (feat, " &", end= "")
+    grad = scaled[feat].values.round(2)
+    for g in grad:
+        print ("\gradient{",g,"} & ", end=" ")
+    print ("\\\\", "[-1em]", end=" ")
+
+
+
