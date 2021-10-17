@@ -324,7 +324,6 @@ def split_by_slalom(source_directory,destination_directory):
      for time_path in times:
         try:
             print (time_path)
-            time_path = times[-14]
             time_df = pd.read_pickle(time_path)
             subject_index = time_df["Subject"].iloc[0]
             slalomtype = time_df["Slalomtype"].iloc[0]
