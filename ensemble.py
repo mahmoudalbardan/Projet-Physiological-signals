@@ -814,3 +814,970 @@ class ExtraTreesQuantileRegressor(BaseForestQuantileRegressor):
         self.min_weight_fraction_leaf = min_weight_fraction_leaf
         self.max_features = max_features
         self.max_leaf_nodes = max_leaf_nodes
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+       import os
+
+from src.d00_conf.conf import conf, conf_loader
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+
+conf_loader("OEG")
+
+
+def creating_string_bands_available(x):
+    output = '_'.join([ele for ele in  x.available_temp if type(ele)==str])
+    return output
+
+
+def adding_busy_hour_data(df):
+    df.loc[df['cell_tech'] == '2G', 'cell_occupation_dl_percentage_bh'] = conf["UPGRADE_SELECTION"][
+                                                                              "BUSY_HOUR_RATE_2G"] * df.loc[df[
+                                                                                                                'cell_tech'] == '2G', 'cell_occupation_dl_percentage']
+    df.loc[df['cell_tech'] == '3G', 'cell_occupation_dl_percentage_bh'] = conf["UPGRADE_SELECTION"][
+                                                                              "BUSY_HOUR_RATE_3G"] * df.loc[df[
+                                                                                                                'cell_tech'] == '3G', 'cell_occupation_dl_percentage']
+    df.loc[df['cell_tech'] == '4G', 'cell_occupation_dl_percentage_bh'] = conf["UPGRADE_SELECTION"][
+                                                                              "BUSY_HOUR_RATE_4G"] * df.loc[df[
+                                                                                                                'cell_tech'] == '4G', 'cell_occupation_dl_percentage']
+
+    return df
+
+
+def processing_codification_code_site(df_code_site, col_bands):
+    for col in col_bands:
+        df_bands = df_code_site.groupby('site_id')[col].unique().reset_index()
+        df_bands = df_bands.rename(columns={col: 'available_temp'})
+        df_bands['available_temp'] = df_bands['available_temp'].apply(lambda x: list(x))
+        df_bands[col + '_available'] = df_bands.apply(creating_string_bands_available, axis=1)
+        df_bands = df_bands.drop(columns='available_temp')
+        df_code_site = df_code_site.merge(df_bands, on='site_id', how='left')
+        # df_code_site['cell_name'] = df_code_site.cell_name.apply(lambda x: str(x).upper())
+        df_code_site[col + '_available'] = df_code_site[col + "_available"].apply(lambda x: str(x).upper())
+    df_code_site = df_code_site.drop_duplicates(subset=["site_id"])
+    return df_code_site[["site_id"] + [col + "_available" for col in col_bands]]
+
+
+def create_site_features(df):
+    df = df.groupby(['date', 'year', 'week', 'week_period', 'site_id', 'cell_tech']).agg(
+        {'cell_occupation_dl_percentage_bh': np.max,
+         'code_utilization': np.max,
+         'power_congestion': np.max  # 'BW_required':np.sum
+         }).reset_index()
+    df = df.rename(columns={'cell_tech': 'site_tech'})
+
+    return df
+
+
+def detect_site_congestion(x):
+    if (x.site_tech == "3G") and ((x.code_utilization > 85) or (x.power_congestion > 85)):
+        return 'CONGESTION_3G'
+    elif (x.site_tech == "4G") and (x.cell_occupation_dl_percentage_bh > 85):
+        return 'CONGESTION_4G'
+    else:
+        return 'NO_CONGESTION'
+
+
+def getBand_3G(df):
+    """
+    - Lambda function to get all band 3G only of a site .
+    """
+    list_band = df.band_BW_available.split("_")
+    band_value = []
+    for band in list_band:
+        for value in ["F1", "F2", "F3", "U1", "U2"]:
+            if (value in band):
+                band_value.append(value)
+
+    return "_".join(sorted(band_value))
+
+
+def getBand_4G(df):
+    list_band = df.band_BW_available.split("_")
+
+    value_str = []
+    for band in list_band:
+        for value in ["LTE1800", "LTE2100", "LTE900"]:
+
+            if (value in band):
+                value_str.append(value + band[-3:-1])
+
+    return "_".join(sorted(value_str))
+
+
+def getBandWithTech(df):
+    if (df.site_tech == "3G"):
+        return getBand_3G(df)
+    if (df.site_tech == "4G"):
+        return getBand_4G(df)
+    return None
+
+
+def select_band(x):
+    if x.congestion == 'CONGESTION_3G':
+        # F1 +F2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" not in x.BW_available and "U2" not in x.BW_available):
+            # Todo
+            # LTE = 5MHZ in 2100
+            if ('LTE21005M' in x.band_BW_available):
+                if (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+F2+F3
+        if (
+                'F1' in x.BW_available and 'F2' in x.BW_available and "F3" in x.BW_available and "U1" not in x.BW_available and "U2" not in x.BW_available):
+            if (x.refarming_2G == 1):
+                x.bands_upgraded = "U900"
+            else:
+                x.bands_upgraded = "new_site"
+
+        # F1+F2+F3+U1
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+
+            if ('LTE9005M' in x.band_BW_available):
+                x.bands_upgraded = "new_site"
+            elif (x.refarming_2G == 1):
+                x.bands_upgraded = "U900"
+            else:
+                x.bands_upgraded = "new_site"
+
+        # F1+F2 +U1
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+
+            if ('LTE21005M' in x.band_BW_available):
+                if ('LTE9005M' in x.band_BW_available):
+                    x.bands_upgraded = "new_site"
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+F2+U1+U2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" in x.BW_available):
+
+            if ('LTE21005M' in x.band_BW_available):
+                x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+U1
+        if ('F1' in x.BW_available and 'F2' not in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+            if ('LTE210010M' in x.band_BW_available):
+                if ('LTE9005M' in x.band_BW_available):
+                    x.bands_upgraded = "new_site"
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F2"
+
+        # F1 + F2 + F3 + U1 + U2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" in x.BW_available and "U1" in x.BW_available and "U2" in x.BW_available):
+            x.bands_upgraded = "new_site"
+        # # U1
+        if ('F1' not in x.BW_available and 'F2' not in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+            if ("LTE2100" in x.band_available):
+
+                if ("LTE900" in x.band_available):
+                    x.bands_upgraded = "new_site"
+                elif (x.refarming_2G == 1):
+
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F1_F2"
+
+            x.bands_upgraded = "U1"
+        # # F1
+        if ('F1' in x.BW_available and 'F2' not in x.BW_available and
+                "F3" not in x.BW_available and "U1" not in x.BW_available and "U2" not in x.BW_available):
+            if ("LTE210010M" in x.band_BW_available):
+                if (x.refarming_2G == 1):
+
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F2"
+
+        # # F1+U1+U2
+        if ('F1' in x.BW_available and 'F2' not in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" in x.BW_available):
+
+            if ("LTE210010M" in x.band_BW_available):
+                x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F2"
+
+        # # U1+F1+F3 # mistake and will be cleaned
+        if ('F1' in x.BW_available and 'F2' not in x.BW_available and
+                "F3" in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+            x.bands_upgraded = None
+
+    if x.congestion == 'CONGESTION_4G':
+        # 15M L1800
+        if ('LTE1800' in x.band_available and 'LTE900' not in x.band_available and
+                "LTE2100" not in x.band_available):
+            # Todo
+            # vérifier le refarming
+            if (x.refarming_3G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            elif (x.refarming_2G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            else:
+                x.bands_upgraded = '2600TDD/newsite'
+        # 15 + 5(L1800 + L2100)
+        if ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                "LTE900" not in x.band_available and 'LTE21005M' in x.band_BW_available):
+            if (x.refarming_3G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            elif (x.refarming_2G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            else:
+                x.bands_upgraded = '2600TDD/newsite'
+
+        # 15+5 (L1800+L900)
+        if ('LTE1800' in x.band_available and 'LTE900' in x.band_available and
+                "LTE2100" not in x.band_available):
+            if (x.refarming_3G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            else:
+                x.bands_upgraded = '2600TDD/newsite'
+
+        # 15+10 (L1800+L2100)
+        if ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                "LTE900" not in x.band_available and "210010M" in x.band_BW_available):
+            if (x.refarming_2G == 1):
+                x.bands_upgraded = x.bands_upgraded + '5M_LTE900'
+            else:
+                x.bands_upgraded = x.bands_upgraded + '2600TDD/newsite'
+
+        # 15+5+5 (L1800+L2100+L900)
+        if ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                "LTE900" in x.band_available and "LTE21005M" in x.band_BW_available):
+            if (x.refarming_3G == 1):
+                x.bands_upgraded = '5M_LTE2100'
+            else:
+                x.bands_upgraded = '2600TDD/newsite'
+        # 15+10+5 (L1800+L2100+L900)
+
+        if ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                "LTE900" in x.band_available and "LTE210010M" in x.band_BW_available):
+            x.bands_upgraded = '2600TDD/newsite'
+
+        # #  15+15 (L1800 +L2100)
+        # if ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+        #         "LTE900" not in  x.band_available and "LTE210015M" in x.band_BW_available):
+        #     x.bands_upgraded="LTE210015M"
+        #
+        # if ('LTE1800' not in x.band_available and 'LTE2100' in x.band_available and
+        #         "LTE900" not in  x.band_available and "LTE21005M" in x.band_BW_available):
+        #     x.bands_upgraded="LTE21005M"
+
+    return x
+
+
+def select_band_with_densification(x):
+    if x.congestion == 'CONGESTION_3G':
+        # F1 +F2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" not in x.BW_available and "U2" not in x.BW_available):
+            # Todo
+            # LTE = 5MHZ in 2100
+            if ('LTE21005M' in x.band_BW_available):
+                if (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+F2+F3
+        if (
+                'F1' in x.BW_available and 'F2' in x.BW_available and "F3" in x.BW_available and "U1" not in x.BW_available and "U2" not in x.BW_available):
+            if (x.refarming_2G == 1):
+                x.bands_upgraded = "U900"
+            else:
+                x.bands_upgraded = "new_site"
+
+        # F1+F2+F3+U1
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+
+            if ('LTE9005M' in x.band_BW_available):
+                x.bands_upgraded = "new_site"
+            elif (x.refarming_2G == 1):
+                x.bands_upgraded = "U900"
+            else:
+                x.bands_upgraded = "new_site"
+
+        # F1+F2 +U1
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+
+            if ('LTE21005M' in x.band_BW_available):
+                if ('LTE9005M' in x.band_BW_available):
+                    x.bands_upgraded = "new_site"
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+F2+U1+U2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" in x.BW_available):
+
+            if ('LTE21005M' in x.band_BW_available):
+                x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F3"
+
+        # F1+U1
+        if ('F1' in x.BW_available and 'F2' not in x.BW_available and
+                "F3" not in x.BW_available and "U1" in x.BW_available and "U2" not in x.BW_available):
+            if ('LTE210010M' in x.band_BW_available):
+                if ('LTE9005M' in x.band_BW_available):
+                    x.bands_upgraded = "new_site"
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = "U900"
+                else:
+                    x.bands_upgraded = "new_site"
+            else:
+                x.bands_upgraded = "F2"
+
+        # F1 + F2 + F3 + U1 + U2
+        if ('F1' in x.BW_available and 'F2' in x.BW_available and
+                "F3" in x.BW_available and "U1" in x.BW_available and "U2" in x.BW_available):
+            x.bands_upgraded = "new_site"
+
+    if x.congestion == 'CONGESTION_4G':
+
+        # 15M L1800
+        bw_required = x.BW_required
+
+        while (bw_required >= 5 & x.newsite == 0):
+
+            # 15M L1800
+            if ('LTE1800' in x.band_available and 'LTE900' not in x.band_available and
+                    "LTE2100" in x.band_available):
+                # Todo
+                # vérifier le refarming
+                if (x.refarming_3G == 1):
+
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE2100')
+
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE2100')
+                else:
+                    x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                    x.newsite = 1
+                print(x.bands_upgraded, x.newsite)
+            # 15 + 5(L1800 + L2100)
+            elif ('LTE1800' in x.band_available and 'LTE2100' not in x.band_available and
+                  "LTE900" not in x.band_available and 'LTE21005M' in x.band_BW_available):
+                if (x.refarming_3G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE2100')
+                elif (x.refarming_2G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE2100')
+                else:
+                    x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                    x.newsite = 1
+
+            # 15+5 (L1800+L900)
+            elif ('LTE1800' in x.band_available and 'LTE900' in x.band_available and
+                  "LTE2100" in x.band_available):
+                if (x.refarming_3G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE2100')
+                else:
+                    x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                    x.newsite = 1
+
+            # 15+10 (L1800+L2100)
+            elif ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                  "LTE900" not in x.band_available and "210010M" in x.band_BW_available):
+                if (x.refarming_2G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE900'
+                    x.band_available = x.band_available + '_LTE900'
+                    bw_required = bw_required - 5
+                    print(x.bands_upgraded + '5M_LTE900')
+
+                else:
+                    x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                    x.newsite = 1
+
+            # 15+5+5 (L1800+L2100+L900)
+            elif ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                  "LTE900" in x.band_available and "LTE21005M" in x.band_BW_available):
+                if (x.refarming_3G == 1):
+                    x.bands_upgraded = x.bands_upgraded + '5M_LTE2100'
+                    x.band_available = x.band_available + '_LTE2100'
+                    bw_required = bw_required - 5
+                else:
+                    x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                    x.newsite = 1
+
+            # 15+10+5 (L1800+L2100+L900)
+            elif ('LTE1800' in x.band_available and 'LTE2100' in x.band_available and
+                  "LTE900" in x.band_available and "LTE210010M" in x.band_BW_available):
+
+                x.bands_upgraded = x.bands_upgraded + '_2600TDD/newsite'
+                x.newsite = 1
+            else:
+                x.bands_upgraded = x.bands_upgraded + "NO_ACTION"
+                break
+
+    return x
+
+
+def create_refarming_features(df):
+    df_3G = df[df.site_tech == "3G"].groupby(['week_period', 'site_id'])[
+        ["code_utilization", "power_congestion"]].first()
+    df_3G.reset_index(inplace=True)
+    df_3G.rename(columns={"code_utilization": "code_utilization_3G", \
+                          "power_congestion": "power_congestion_3G"},
+                 inplace=True)
+
+    df_2G = df[df.site_tech == "2G"].groupby(['week_period',\
+                        'site_id'])[["cell_occupation_dl_percentage_bh"]].first()
+    df_2G.reset_index(inplace=True)
+    df_2G.rename(columns={"cell_occupation_dl_percentage_bh":\
+                              "cell_occupation_dl_percentage_bh_2G"}, inplace=True)
+
+    df = df.merge(df_3G, how="left", on=['week_period', 'site_id'])
+    df = df.merge(df_2G, how="left", on=['week_period', 'site_id'])
+    ## creating 3G refarming code:
+    df["refarming_3G"] = 0
+    df.loc[(df['code_utilization_3G'] < 90) & (df['power_congestion_3G'] < 90), "refarming_3G"] = 1
+    ## creating 2G refarming code:
+    df["refarming_2G"] = 0
+    df.loc[(df['cell_occupation_dl_percentage_bh_2G'] < 2), "refarming_2G"] = 1
+    return df
+
+
+def compute_the_band_selected_for_the_upgrade(df, week_of_the_upgrade):
+    df['week_of_the_upgrade'] = week_of_the_upgrade
+    df.week_period = df.week_period.apply(lambda x: str(x))
+    df = df[~df.bands_upgraded.isnull()]
+    output = df.loc[df['week_period'] == week_of_the_upgrade][
+        ['site_id', 'week_of_the_upgrade', 'band_before', 'bands_upgraded', 'site_tech']]
+    output.to_csv(os.path.join(conf["PATH"]["MODELS_OUTPUT"], 'upgrade_selection_output', 'df_for_week_upgrade.csv'),
+                  sep="|", index=False)
+    df = df.drop_duplicates(subset=['site_id', 'congestion', 'week_of_the_upgrade', 'bands_upgraded', 'site_tech'],
+                            keep='first')
+    df_upgraded_band = df[['site_id', 'site_tech',
+                           'week_period', 'congestion',
+                           'band_before', 'bands_upgraded']]
+    df_upgraded_band.to_csv(
+        os.path.join(conf["PATH"]["MODELS_OUTPUT"], 'upgrade_selection_output', 'df_all_upgrade.csv'), sep="|",
+        index=False)
+
+    return output
+
+
+
+# ----------------------------
+def get_cell_tech(x):
+    if x.startswith("UMTS"):
+        return "3G"
+    if x.startswith("LTE"):
+        return "4G"
+    if x.startswith("GSM"):
+        return "2G"
+    return get_cell_tech
+
+def fill_cell_tech(x):
+    techs = []
+    if x["cell_tech_available"] == "":
+        if "LTE" in x["band_available"]:
+            techs.append("4G")
+        if "UMTS" in x["band_available"]:
+            techs.append("3G")
+        if "GSM" in x["band_available"]:
+            techs.append("2G")
+        x["cell_tech_available"] =  '_'.join(techs)
+    return x
+
+def upgrade_selection_pipeline(df, df_site, week_of_the_upgrade=conf['TRAFFIC_IMPROVEMENT']['WEEK_OF_THE_UPGRADE']):
+    df_site = df_site[['site_id', 'site_band_width', 'cell_id', 'cell_band']]
+    df_site.rename(columns={"site_band_width": "BW", "cell_band": "band"}, inplace=True)
+    df_cell_tech = df.drop_duplicates(subset=["site_id", "cell_tech"]).reset_index(drop=True)
+    df_site = df_site.merge(df_cell_tech[["site_id", "cell_tech"]], on="site_id", how="left").fillna('')
+    df_site["band_BW"] = df_site["band"] + df_site["BW"]
+
+    df_code_site = processing_codification_code_site(df_site, ["BW", "band", "band_BW", "cell_tech"])
+
+    df_adding_bh = adding_busy_hour_data(df)
+
+    ## add busy hour KPI
+    df_congestion = create_site_features(df_adding_bh)
+    ## detect congestion
+    print(df_congestion.site_tech.unique())
+    df_congestion['congestion'] = df_congestion.apply(detect_site_congestion, axis=1)
+
+    ## creating refarming features
+    df_congestion = create_refarming_features(df_congestion)
+    df_congestion = df_congestion[(df_congestion.congestion != 'NO_CONGESTION') | (
+            (df_congestion.congestion.isnull() == False) & (df_congestion.congestion != 'NO_CONGESTION'))]
+    df_congestion = df_congestion.merge(df_code_site, how="left", on='site_id')
+    df_congestion["band_before"] = df_congestion.apply(getBandWithTech, axis=1)
+    df_congestion["bands_upgraded"] = ''
+    ## Select Band
+    df_congestion = df_congestion.apply(select_band, axis=1)
+    df_congestion.to_csv(
+        os.path.join(conf["PATH"]["MODELS_OUTPUT"], 'upgrade_selection_output', 'df_site_congestion.csv'), index=False,
+        sep="|")
+    selected_band = compute_the_band_selected_for_the_upgrade(df_congestion, week_of_the_upgrade=week_of_the_upgrade)
+    return selected_band
+
+# cells_id = ['0002EB7370AD1C384E4FDAACFF046D02',
+#             '000314FBF56860DB479290AF6D1379D6',
+#             '00032D7DD61A4CCA0523E95F24AA2F0D',
+#             '00057581D335027A8C35C3BFDAB09EE0',
+#             '0007D51D2DF5A7C3919223C4EE832EA2',
+#
+#             '00017AFE955DA76BFE7CCA3340CBABB0',
+#             '0005B8BC18F216212A74AEC768DE210A',
+#             '000638D83A19FE5EE1F54BF4B1C8DF31',
+#             '0007B7389BC6FD8D19F1016851AE030D',
+#             '00089EF52E71524D88F1508F1B3622BC']
+#
+
+def prepare_data_4g_bh_weekly(compute_data_4g_bh_weekly):
+    if compute_data_4g_bh_weekly:
+        df_4g_bh_daily = pd.read_csv( \
+            "/home/sc_team/arwa.abdelhamid/data/01_raw/Requested_KPIs/Huawei Smart Capex/4G_BH_Daily.csv", \
+            sep=",")
+        df_4g_bh_selected_daily = df_4g_bh_daily[
+            ["Global_Cell_Id", "Date", "DL PRB Usage Rate(%)", "DL PDCP SDU TRAFFIC VOLUME (GB)"]]
+        df_4g_bh_selected_daily.columns = ["cell_id", "date", "prb_used_busy_hour", "traffic_data_busy_hour"]
+        df_4g_bh_selected_daily["date"] = pd.to_datetime(df_4g_bh_selected_daily["date"])
+        df_4g_bh_selected_daily["week_period"] = \
+            df_4g_bh_selected_daily["date"].apply(lambda x: x.strftime("%Y%W"))
+
+        df_4g_bh_selected_daily[["prb_used_busy_hour",
+                                 "traffic_data_busy_hour"]] = \
+            df_4g_bh_selected_daily[["prb_used_busy_hour",
+                                     "traffic_data_busy_hour"]].astype(float)
+
+        df_4g_bh_selected_weekly = \
+            df_4g_bh_selected_daily.groupby(["cell_id", "week_period"]) \
+                .agg({"prb_used_busy_hour": np.nanmean,
+                      "traffic_data_busy_hour": np.nanmean})
+        df_4g_bh_selected_weekly.reset_index(inplace=True)
+        df_4g_bh_selected_weekly["cell_tech"] = "4G"
+        df_4g_bh_selected_weekly.to_csv( \
+            "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_4g_bh_weekly.csv", sep="|", index=False)
+    else:
+        df_4g_bh_selected_weekly = pd.read_csv( \
+            "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_4g_bh_weekly.csv", sep="|")
+    return df_4g_bh_selected_weekly
+
+
+def prepare_data_3g_bh_weekly(compute_data_3g_bh_weekly):
+    if compute_data_3g_bh_weekly:
+        df_3g_bh_daily = pd.read_csv( \
+            "/home/sc_team/arwa.abdelhamid/data/01_raw/Requested_KPIs/Huawei Smart Capex/3G_BH_Daily.csv", \
+            sep=",")
+        df_3g_bh_daily = df_3g_bh_daily[df_3g_bh_daily["Code Utilization"] != "NIL"]
+        df_3g_bh_selected_daily = df_3g_bh_daily[
+            ["Global_Cell_Id", "Date", "Code Utilization", \
+             "power congestion RATE 2", "TOTAL DATA TRAFFIC - DL (GB)"]]
+        df_3g_bh_selected_daily.columns = ["cell_id", "date", "code_utilisation", \
+                                           "power_congestion", "traffic_data_busy_hour"]
+        df_3g_bh_selected_daily["date"] = pd.to_datetime(df_3g_bh_selected_daily["date"])
+        df_3g_bh_selected_daily["week_period"] = \
+            df_3g_bh_selected_daily["date"].apply(lambda x: x.strftime("%Y%W"))
+        df_3g_bh_selected_daily[["code_utilisation",
+                                 "power_congestion",
+                                 "traffic_data_busy_hour"]] = \
+            df_3g_bh_selected_daily[["code_utilisation",
+                                     "power_congestion",
+                                     "traffic_data_busy_hour"]].astype(float)
+        df_3g_bh_selected_daily = \
+            df_3g_bh_selected_daily.groupby(["cell_id", "week_period"]) \
+                .agg({"code_utilisation": np.nanmean,
+                      "power_congestion": np.nanmean,
+                      "traffic_data_busy_hour": np.nanmean})
+        df_3g_bh_selected_daily.reset_index(inplace=True)
+        df_3g_bh_selected_daily["cell_tech"] = "3G"
+        df_3g_bh_selected_daily.to_csv( \
+            "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_3g_bh_weekly.csv",
+            sep="|", index=False)
+    else:
+        df_3g_bh_selected_weekly = pd.read_csv( \
+            "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_3g_bh_weekly.csv", sep="|")
+    return df_3g_bh_selected_weekly
+
+
+def get_linear_regression_coefficient(x, y):
+    model = LinearRegression(fit_intercept=False)
+    model.fit(x, y)
+    return model.coef_[0]
+
+
+def select_data_for_one_cell(cell_id, df_historical, df_predicted, df_3g_bh, df_4g_bh):
+    df_historical_one_cell = df_historical[df_historical["cell_id"] == cell_id]
+    df_predicted_one_cell = df_predicted[df_predicted["cell_id"] == cell_id]
+    cell_tech = df_historical_one_cell["cell_tech"].unique()[0]
+    if cell_tech == "3G":
+        df_bh_one_cell = df_3g_bh[df_3g_bh["cell_id"] == cell_id]
+    if cell_tech == "4G":
+        df_bh_one_cell = df_4g_bh[df_4g_bh["cell_id"] == cell_id]
+
+    df_bh_one_cell["week_period"] = df_bh_one_cell["week_period"].astype(int)
+    df_historical_one_cell["week_period"] = df_historical_one_cell["week_period"].astype(int)
+    df_predicted_one_cell["week_period"] = df_predicted_one_cell["week_period"].astype(int)
+
+    df_bh_one_cell.sort_values(by="week_period", ascending=True, inplace=True)
+    df_historical_one_cell.sort_values(by="week_period", ascending=True, inplace=True)
+    df_predicted_one_cell.sort_values(by="week_period", ascending=True, inplace=True)
+    return df_historical_one_cell, df_predicted_one_cell, df_bh_one_cell, cell_tech
+
+
+def compute_predicted_traffic_busy_hour(df_historical_one_cell,
+                                        df_predicted_one_cell,
+                                        df_bh_one_cell,
+                                        ):
+    df_historical_one_cell['increase_factor_historical'] = \
+        df_historical_one_cell['total_data_traffic_dl_gb'] / \
+        df_historical_one_cell['total_data_traffic_dl_gb'].shift(1)
+    traffic_data_last_week = df_historical_one_cell['total_data_traffic_dl_gb'].values[-1]
+    df_predicted_one_cell["increase_factor_predicted"] = \
+        df_predicted_one_cell["total_data_traffic_dl_gb"] / traffic_data_last_week
+    df_predicted_one_cell['traffic_busy_hour_predicted'] = \
+        df_bh_one_cell['traffic_data_busy_hour'].values[-1] * df_predicted_one_cell['increase_factor_predicted']
+    return df_bh_one_cell, df_predicted_one_cell
+
+
+def add_new_busy_hour_data(cell_tech, df_predicted_one_cell, df_bh_one_cell):
+    if cell_tech == "3G":
+        coef_code_utilisation = \
+            get_linear_regression_coefficient(df_bh_one_cell["traffic_data_busy_hour"].values.reshape(-1, 1), \
+                                              df_bh_one_cell["code_utilisation"].values.reshape(-1, 1))
+        coef_power_congestion = \
+            get_linear_regression_coefficient(df_bh_one_cell["traffic_data_busy_hour"].values.reshape(-1, 1), \
+                                              df_bh_one_cell["power_congestion"].values.reshape(-1, 1))
+
+        df_predicted_one_cell['power_congestion_busy_hour_predicted'] = \
+            df_predicted_one_cell['traffic_busy_hour_predicted'] * coef_power_congestion
+        df_predicted_one_cell['code_utilisation_busy_hour_predicted'] = \
+            df_predicted_one_cell['traffic_busy_hour_predicted'] * coef_code_utilisation
+
+    if cell_tech == "4G":
+        coef_prb_used = \
+            get_linear_regression_coefficient(df_bh_one_cell["traffic_data_busy_hour"].values.reshape(-1, 1), \
+                                              df_bh_one_cell["prb_used_busy_hour"].values.reshape(-1, 1))
+        df_predicted_one_cell['prb_used_busy_hour_predicted'] = \
+            df_predicted_one_cell['traffic_busy_hour_predicted'] * coef_prb_used
+
+    return df_predicted_one_cell
+
+
+def add_congestion_variable(x, df_site):
+    if x["cell_tech"] == "3G":
+        if x["power_congestion_busy_hour_predicted"] > 85 \
+                or x["code_utilisation_busy_hour_predicted"] > 85:
+            x["congestion"] = "CONGESTION_3G"
+        else:
+            x["congestion"] = "NO_CONGESTION"
+    if x["cell_tech"] == "4G":
+        bw = df_site[df_site["cell_id"] == cells_id[0]]["BW"].mode()[0][:-1]
+        x["prb_available"] = float(bw) * 5
+        if x["prb_used_busy_hour_predicted"] / x["prb_available"] > 0.85:
+            x["congestion"] = "CONGESTION_4G"
+        else:
+            x["congestion"] = "NO_CONGESTION"
+    return x
+
+
+def get_nb_carriers(x):
+    nb_carriers = max(round((x["power_congestion_busy_hour_predicted"] - 85) / 85, 0),
+                      round((x["code_utilisation_busy_hour_predicted"] - 85) / 85, 0))
+    return nb_carriers
+
+def prepare_data_for_congestion_detection(df_historical, df_predicted,
+                                          df_3g_bh, df_4g_bh, df_site):
+    cells_id = df_predicted["cell_id"].unique()
+    list_of_df_predicted = []
+    for j, cell_id in enumerate(cells_id):
+        print("run congestion detection")
+        try:
+            print(str(j), " out of ", len(cells_id))
+            df_historical_one_cell, df_predicted_one_cell, \
+            df_bh_one_cell, cell_tech = select_data_for_one_cell(cell_id, df_historical,
+                                                                 df_predicted,
+                                                                 df_3g_bh, df_4g_bh)
+            df_bh_one_cell, df_predicted_one_cell = \
+                compute_predicted_traffic_busy_hour(df_historical_one_cell,
+                                                    df_predicted_one_cell,
+                                                    df_bh_one_cell)
+            df_predicted_one_cell = add_new_busy_hour_data(cell_tech,
+                                                           df_predicted_one_cell,
+                                                           df_bh_one_cell)
+            df_predicted_one_cell = df_predicted_one_cell.apply(add_congestion_variable,
+                                                                df_site=df_site,
+                                                                axis=1)
+
+            list_of_df_predicted.append(df_predicted_one_cell)
+        except:
+            continue
+        if j%5000 == 0 and j!=0:
+            df_predicted_with_congestion_sample = pd.concat(list_of_df_predicted)
+            dir_ = "/data/OEG/02_intermediate/work_mahmoud_test_v0/intermdiate_congestion"
+            name = "df_prediction_with_congestion"+str(j) + ".csv"
+            df_predicted_with_congestion_sample.to_csv(os.path.join(dir_,name),sep="|",index=False)
+            df_predicted_with_congestion_sample.reset_index(inplace=True, drop=True)
+
+    df_predicted_with_congestion = pd.concat(list_of_df_predicted)
+    df_predicted_with_congestion.reset_index(inplace=True, drop=True)
+    return df_predicted_with_congestion
+
+def get_congestion_by_sectors(df_predicted_with_congestion):
+    df_predicted_with_congestion = \
+        df_predicted_with_congestion[df_predicted_with_congestion["congestion"] \
+                                     != "NO_CONGESTION"]
+    df_predicted_with_congestion_4g = \
+        df_predicted_with_congestion[df_predicted_with_congestion["congestion"] \
+                                     == "CONGESTION_4G"]
+    df_predicted_with_congestion_4g["BW_required"] = \
+        df_predicted_with_congestion_4g["prb_used_busy_hour_predicted"] / 5
+
+    df_congestion_sectors_4g = df_predicted_with_congestion_4g.groupby(["site_id", "cell_sector",
+                                                                        "week_period",
+                                                                        ])["BW_required"].sum()
+    df_congestion_sectors_4g = df_congestion_sectors_4g.reset_index()
+    df_congestion_sectors_4g = df_congestion_sectors_4g.groupby(["week_period", "site_id"]).apply( \
+        lambda x: x.sort_values(by="BW_required", ascending=False).iloc[0, :])
+    df_congestion_sectors_4g.reset_index(inplace=True, drop=True)
+
+    df_predicted_with_congestion_3g = \
+        df_predicted_with_congestion[df_predicted_with_congestion["congestion"] \
+                                     == "CONGESTION_3G"]
+    df_predicted_with_congestion_3g["additional_carriers_number"] = \
+        df_predicted_with_congestion_3g.apply(get_nb_carriers, axis=1)
+    df_congestion_sectors_3g = df_predicted_with_congestion_3g.groupby(["site_id", "cell_sector",
+                                                                        "week_period",
+                                                                        ])["additional_carriers_number"].sum()
+    df_congestion_sectors_3g = df_congestion_sectors_3g.reset_index()
+    df_congestion_sectors_3g = df_congestion_sectors_3g.groupby(["week_period", "site_id"]).apply( \
+        lambda x: x.sort_values(by="additional_carriers_number", ascending=False).iloc[0, :])
+    df_congestion_sectors_3g.reset_index(inplace=True, drop=True)
+
+    df_congestion_sectors_3g["week_period"] = \
+        df_congestion_sectors_3g["week_period"].astype(int)
+    df_congestion_sectors_4g["week_period"] = \
+        df_congestion_sectors_4g["week_period"].astype(int)
+    #df_congestion_sectors_4g.sort_values(by="week_period",inplace=True,ascending=True)
+    #df_congestion_sectors_3g.sort_values(by="week_period", inplace=True, ascending=True)
+    df_congestion_sectors_4g = \
+        df_congestion_sectors_4g[int(conf["TRAFFIC_IMPROVEMENT"]["WEEK_OF_THE_UPGRADE"]) \
+    > df_congestion_sectors_4g["week_period"]]
+    df_congestion_sectors_3g = \
+        df_congestion_sectors_3g[int(conf["TRAFFIC_IMPROVEMENT"]["WEEK_OF_THE_UPGRADE"]) \
+    > df_congestion_sectors_3g["week_period"]]
+    gps_4g = df_congestion_sectors_4g.groupby(["site_id"])
+    gps_4g = [gp[1] for gp in gps_4g]
+    df_congestion_site_4g = \
+        pd.concat( [get_first_congestion(gp,tech="4G") for gp in gps_4g])
+    gps_3g = df_congestion_sectors_3g.groupby(["site_id"])
+    gps_3g = [gp[1] for gp in gps_3g]
+    df_congestion_site_3g = \
+        pd.concat([get_first_congestion(gp, tech="3G") for gp in gps_3g])
+
+    return df_congestion_site_3g, df_congestion_site_4g
+
+def get_first_congestion(df,tech):
+    site_id = df["site_id"].unique()[0]
+    min_week_period = df["week_period"].min()
+    sector = df["cell_sector"][df["week_period"] == min_week_period].values[0]
+    if tech == "4G":
+        kpi_value =  df["BW_required"][df["week_period"] == min_week_period].values[0]
+        kpi_name = "BW_required"
+    if tech == "3G":
+        kpi_value = df["additional_carriers_number"][\
+            df["week_period"] == min_week_period].values[0]
+        kpi_name = "additional_carriers_number"
+    columns = ["site_id","week_period","site_sector",kpi_name]
+    df_congestion_site = pd.DataFrame(
+        np.array([site_id,min_week_period,sector,kpi_value]).reshape(1,len(columns)),
+                                      columns = columns)
+    return df_congestion_site
+
+
+def upgrade_selection_pipeline(df_predicted_traffic_kpis, df_sites):
+    df_sites = pd.read_csv( \
+        "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_sites_with_bw_v0.csv", sep="|")
+    df_cell_sector_mapping = pd.read_csv("/data/OEG/01_raw/deployment_history/cell_sector_mapping.csv", sep=",")
+    df_cell_sector_mapping.columns = ["site_id", "cell_sector", "cell_id"]
+    df_sites = pd.merge(left=df_sites,
+                        right=df_cell_sector_mapping,
+                        left_on=["site_id", "cell_id"],
+                        right_on=["site_id", "cell_id"],
+                        how="left")
+    df_traffic_weekly_kpis = pd.read_csv("/data/OEG/02_intermediate/processed_oss_all.csv",
+                                         sep="|")
+    df_predicted_traffic_kpis = pd.read_csv(
+        "/data/OEG/02_intermediate/new_traffic_forecasting_boxcox/df_predicted_traffic_kpis.csv",
+        sep="|")
+
+    df_traffic_weekly_kpis = pd.merge(left=df_traffic_weekly_kpis,
+                                      right=df_sites[["cell_id", "site_id",
+                                                      "cell_band", "site_region"]],
+                                      on="cell_id",
+                                      how="left")
+    df_predicted_traffic_kpis = pd.merge(left=df_predicted_traffic_kpis,
+                                         right=df_sites[["cell_id", "site_region",
+                                                         "cell_sector"]],
+                                         on="cell_id",
+                                         how="left")
+
+    df_3g_bh = prepare_data_3g_bh_weekly(compute_data_3g_bh_weekly=False)
+    df_4g_bh = prepare_data_4g_bh_weekly(compute_data_4g_bh_weekly=False)
+    df_predicted_with_congestion = prepare_data_for_congestion_detection(
+        df_traffic_weekly_kpis,
+        df_predicted_traffic_kpis,
+        df_3g_bh,
+        df_4g_bh,
+        df_sites)
+
+    df_congestion_site_3g, df_congestion_site_4g = \
+        get_congestion_by_sectors(df_predicted_with_congestion)
+    df_congestion_site_3g["site_tech"] = "3G"
+    df_congestion_site_3g["congestion"] = 'CONGESTION_3G'
+    df_congestion_site_4g["site_tech"] = "4G"
+    df_congestion_site_4g["congestion"] = 'CONGESTION_4G'
+
+    df_sites = pd.read_csv( \
+        "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_sites_with_bw_v0.csv",
+        sep="|")
+    df_predicted_traffic_kpis = pd.read_csv(
+        "/data/OEG/02_intermediate/new_traffic_forecasting_boxcox/df_predicted_traffic_kpis.csv",
+        sep="|")
+    df_congestion_site_3g = pd.read_csv( \
+        "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_congestion_site_3g.csv",
+        sep="|")
+    df_congestion_site_4g = pd.read_csv( \
+        "/data/OEG/02_intermediate/work_mahmoud_test_v0/df_congestion_site_4g.csv",
+        sep="|")
+
+    df_cell_tech_bands = df_predicted_traffic_kpis[["cell_id", "cell_band"]].drop_duplicates()
+    cells_to_handle = df_cell_tech_bands["cell_id"].unique().tolist()
+    df_sites = df_sites[df_sites["cell_id"].isin(cells_to_handle)]
+    df_sites.dropna(inplace=True, subset=["cell_band"])
+
+    df_sites["cell_tech"] = ""
+    df_sites["cell_tech"] = df_sites["cell_band"].apply(get_cell_tech)
+    df_sites = df_sites[['site_id', 'site_band_width', 'cell_id', 'cell_band']]
+    df_sites.rename(columns={"site_band_width": "BW", "cell_band": "band"}, inplace=True)
+    df_cell_tech = df_predicted_traffic_kpis.drop_duplicates( \
+        subset=["site_id", "cell_tech"]).reset_index(drop=True)[["site_id", "cell_tech"]]
+    df_sites = df_sites.merge(df_cell_tech,
+                              on="site_id", how="left")
+    df_sites["band_BW"] = df_sites["band"] + df_sites["BW"]
+    df_code_site = processing_codification_code_site(df_sites, ["BW", "band",
+                                                                "band_BW", "cell_tech"])
+    df_code_site = df_code_site.apply(fill_cell_tech, axis=1)
+    df_congestion_site_3g["site_tech"] = "3G"
+    df_congestion_site_3g["congestion"] = 'CONGESTION_3G'
+    df_congestion_site_4g["site_tech"] = "4G"
+    df_congestion_site_4g["congestion"] = 'CONGESTION_4G'
+    df_congestion = pd.concat([df_congestion_site_3g, df_congestion_site_4g])
+    df_congestion = df_congestion.merge(df_code_site, how="left", on='site_id')
+    df_congestion["band_before"] = df_congestion.apply(getBandWithTech, axis=1)
+    df_congestion["bands_upgraded"] = ''
+
+    df_predicted_traffic_kpis_with_bh = adding_busy_hour_data(df_predicted_traffic_kpis)
+    df_sites_features = create_site_features(df_predicted_traffic_kpis_with_bh)
+    df_sites_with_refarming_features = create_refarming_features(df_sites_features)
+    df_sites_with_refarming_features = \
+        df_sites_with_refarming_features[["site_id", "week_period",
+                                          "site_tech", "refarming_2G",
+                                          "refarming_3G"]]
+
+    df_congestion_with_refarming_features = pd.merge(left=df_congestion,
+                                                     right=df_sites_with_refarming_features,
+                                                     on=["site_id", "week_period", "site_tech"])
+
+    ## Select Band
+    max_week_period = df_traffic_weekly_kpis["week_period"].astype(int).max()
+    df_congestion_with_added_bands = \
+        df_congestion_with_refarming_features.apply(select_band, axis=1)
+    df_congestion_with_added_bands = df_congestion_with_added_bands[ \
+        df_congestion_with_added_bands["week_period"].astype(int) > max_week_period]
+
+    return df_congestion_with_added_bands
+
