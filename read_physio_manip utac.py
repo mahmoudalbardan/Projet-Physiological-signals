@@ -369,8 +369,8 @@ if __name__ == "__main__":
 
     # Explarotary data analysis
     # reading the data and constructing pd.dataframes
-    rootdir = 'F:/data/UTAC_Etude 2019_freq-accel'  
-    localdir = 'F:/data/backups/maniputac'
+    rootdir = 'F:/data/Etude 2019_freq-accel'  
+    localdir = 'F:/data/backups/mani'
     
     # for the split into slaloms
     slaloms_source_directory = os.path.join(localdir,"dataframes/all_slaloms/combined_dataframes")
